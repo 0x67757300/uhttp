@@ -6,7 +6,7 @@ import json
 import re
 from ast import Tuple
 from asyncio import to_thread
-from enum import Enum
+from enum import Enum, StrEnum
 from http import HTTPMethod, HTTPStatus
 from http.cookies import CookieError, SimpleCookie
 from inspect import iscoroutinefunction
@@ -29,6 +29,27 @@ from typing_extensions import Doc
 AppType = TypeVar("AppType", bound="uHTTP")  # type: ignore
 RouteHandler = Union[Callable[..., None], Callable[..., Awaitable[None]]]
 Routes = Dict[str, Dict[HTTPMethod, RouteHandler]]
+
+
+# Copied from Litestar. https://github.com/litestar-org/litestar/blob/main/litestar/enums.py
+class MediaType(StrEnum):
+    """An Enum for ``Content-Type`` header values."""
+
+    JSON = "application/json"
+    MESSAGEPACK = "application/x-msgpack"
+    HTML = "text/html"
+    TEXT = "text/plain"
+    CSS = "text/css"
+    XML = "application/xml"
+
+
+class RequestEncodingType(StrEnum):
+    """An Enum for request ``Content-Type`` header values designating encoding formats."""
+
+    JSON = "application/json"
+    MESSAGEPACK = "application/x-msgpack"
+    MULTI_PART = "multipart/form-data"
+    URL_ENCODED = "application/x-www-form-urlencoded"
 
 
 class Application:
@@ -354,14 +375,14 @@ class Application:
                         break
 
                 content_type = request.headers.get("content-type", "")
-                if "application/json" in content_type:
+                if MediaType.JSON in content_type:
                     try:
                         request.json = await to_thread(
                             json.loads, request.body.decode()
                         )
                     except (UnicodeDecodeError, json.JSONDecodeError):
                         raise Response(HTTPStatus.BAD_REQUEST)
-                elif "application/x-www-form-urlencoded" in content_type:
+                elif RequestEncodingType.URL_ENCODED in content_type:
                     request.form = MultiDict(
                         await to_thread(parse_qs, unquote(request.body))
                     )
@@ -559,7 +580,7 @@ class Response(Exception):
         elif isinstance(any, dict):
             return cls(
                 status=200,
-                headers={"content-type": "application/json"},
+                headers={"content-type": MediaType.JSON},
                 body=json.dumps(any).encode(),
             )
         elif isinstance(any, cls):
@@ -580,7 +601,7 @@ async def asyncfy(func, /, *args, **kwargs):
 class MultiDict(dict):
     """
     Support for multipart forms. Depends on [python-multipart](https://pypi.org/project/python-multipart/).
-    
+
     E.g.
 
     ```python
