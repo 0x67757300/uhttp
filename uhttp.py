@@ -1,25 +1,32 @@
 """ASGI micro framework"""
 
-import re
+from __future__ import annotations
+
+import enum
 import json
-from http import HTTPStatus
-from http.cookies import SimpleCookie, CookieError
-from urllib.parse import parse_qs, unquote
+import re
+from ast import Tuple
 from asyncio import to_thread
+from http import HTTPMethod, HTTPStatus
+from http.cookies import CookieError, SimpleCookie
 from inspect import iscoroutinefunction
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Union
+from urllib.parse import parse_qs, unquote
+
+RouteHandler = Union[Callable[..., None], Callable[..., Awaitable[None]]]
+Routes = Dict[str, Dict[HTTPMethod, RouteHandler]]
 
 
 class Application:
     def __init__(
         self,
-        *,
-        routes=None,
-        startup=None,
-        shutdown=None,
-        before=None,
-        after=None,
-        max_content=1048576,
-    ):
+        routes: Optional[Routes] = None,
+        startup: Optional[List[RouteHandler]] = None,
+        shutdown: Optional[List[RouteHandler]] = None,
+        before: Optional[List[RouteHandler]] = None,
+        after: Optional[List[RouteHandler]] = None,
+        max_content: int = 1048576,
+    ) -> None:
         self._routes = routes or {}
         self._startup = startup or []
         self._shutdown = shutdown or []
@@ -27,7 +34,7 @@ class Application:
         self._after = after or []
         self._max_content = max_content
 
-    def mount(self, app, prefix=""):
+    def mount(self, app: Application, prefix: Optional[str] = "") -> None:
         self._startup += app._startup
         self._shutdown += app._shutdown
         self._before += app._before
@@ -35,23 +42,25 @@ class Application:
         self._routes.update({prefix + k: v for k, v in app._routes.items()})
         self._max_content = max(self._max_content, app._max_content)
 
-    def startup(self, func):
+    def startup(self, func: Callable) -> Callable:
         self._startup.append(func)
         return func
 
-    def shutdown(self, func):
+    def shutdown(self, func: Callable) -> Callable:
         self._shutdown.append(func)
         return func
 
-    def before(self, func):
+    def before(self, func: Callable) -> Callable:
         self._before.append(func)
         return func
 
-    def after(self, func):
+    def after(self, func: Callable) -> Callable:
         self._after.append(func)
         return func
 
-    def route(self, path, methods=("GET",)):
+    def route(
+        self, path: str, methods: Tuple[HTTPMethod] = (HTTPMethod.GET,)
+    ) -> Callable:
         def decorator(func):
             self._routes.setdefault(path, {}).update(
                 {method: func for method in methods}
@@ -60,34 +69,34 @@ class Application:
 
         return decorator
 
-    def get(self, path):
-        return self.route(path, methods=("GET",))
+    def get(self, path: str) -> Callable:
+        return self.route(path, methods=(HTTPMethod.GET,))
 
-    def head(self, path):
-        return self.route(path, methods=("HEAD",))
+    def head(self, path: str) -> Callable:
+        return self.route(path, methods=(HTTPMethod.HEAD,))
 
-    def post(self, path):
-        return self.route(path, methods=("POST",))
+    def post(self, path: str) -> Callable:
+        return self.route(path, methods=(HTTPMethod.POST,))
 
-    def put(self, path):
-        return self.route(path, methods=("PUT",))
+    def put(self, path: str) -> Callable:
+        return self.route(path, methods=(HTTPMethod.PUT,))
 
-    def delete(self, path):
-        return self.route(path, methods=("DELETE",))
+    def delete(self, path: str) -> Callable:
+        return self.route(path, methods=(HTTPMethod.DELETE,))
 
-    def connect(self, path):
-        return self.route(path, methods=("CONNECT",))
+    def connect(self, path: str) -> Callable:
+        return self.route(path, methods=(HTTPMethod.CONNECT,))
 
-    def options(self, path):
-        return self.route(path, methods=("OPTIONS",))
+    def options(self, path: str) -> Callable:
+        return self.route(path, methods=(HTTPMethod.OPTIONS,))
 
-    def trace(self, path):
-        return self.route(path, methods=("TRACE",))
+    def trace(self, path: str) -> Callable:
+        return self.route(path, methods=(HTTPMethod.TRACE,))
 
-    def patch(self, path):
-        return self.route(path, methods=("PATCH",))
+    def patch(self, path: str) -> Callable:
+        return self.route(path, methods=(HTTPMethod.PATCH,))
 
-    async def __call__(self, scope, receive, send):
+    async def __call__(self, scope: Dict, receive, send):
         state = scope.get("state", {})
 
         if scope["type"] == "lifespan":
@@ -141,18 +150,18 @@ class Application:
                         [[k.decode(), v.decode()] for k, v in scope["headers"]]
                     )
                 except UnicodeDecodeError:
-                    raise Response(400)
+                    raise Response(HTTPStatus.BAD_REQUEST)
 
                 try:
                     request.cookies.load(request.headers.get("cookie", ""))
                 except CookieError:
-                    raise Response(400)
+                    raise Response(HTTPStatus.BAD_REQUEST)
 
                 while True:
                     event = await receive()
                     request.body += event["body"]
                     if len(request.body) > self._max_content:
-                        raise Response(413)
+                        raise Response(HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
                     if not event["more_body"]:
                         break
 
@@ -163,7 +172,7 @@ class Application:
                             json.loads, request.body.decode()
                         )
                     except (UnicodeDecodeError, json.JSONDecodeError):
-                        raise Response(400)
+                        raise Response(HTTPStatus.BAD_REQUEST)
                 elif "application/x-www-form-urlencoded" in content_type:
                     request.form = MultiDict(
                         await to_thread(parse_qs, unquote(request.body))
@@ -180,11 +189,11 @@ class Application:
                             ret = await asyncfy(func, request)
                             response = Response.from_any(ret)
                         else:
-                            response = Response(405)
+                            response = Response(HTTPStatus.METHOD_NOT_ALLOWED)
                             response.headers["allow"] = ", ".join(methods)
                         break
                 else:
-                    response = Response(404)
+                    response = Response(HTTPStatus.NOT_FOUND)
 
             except Response as early_response:
                 response = early_response
@@ -226,18 +235,18 @@ class Application:
 class Request:
     def __init__(
         self,
-        method,
-        path,
+        method: HTTPMethod,
+        path: str,
         *,
-        ip="",
-        params=None,
-        args=None,
-        headers=None,
-        cookies=None,
-        body=b"",
-        json=None,
-        form=None,
-        state=None,
+        ip: Optional[str] = "",
+        params: Optional[MultiDict] = None,
+        args: Optional[Dict] = None,
+        headers: Optional[MultiDict] = None,
+        cookies: Optional[SimpleCookie] = None,
+        body: Optional[bytes] = b"",
+        json: Optional[Dict] = None,
+        form: MultiDict = None,
+        state: Optional[Dict] = None,
     ):
         self.method = method
         self.path = path
@@ -256,8 +265,15 @@ class Request:
 
 
 class Response(Exception):
-    def __init__(self, status, *, headers=None, cookies=None, body=b""):
-        self.status = status
+    def __init__(
+        self,
+        status: HTTPStatus,
+        *,
+        headers: Optional[MultiDict] = None,
+        cookies: Optional[SimpleCookie] = None,
+        body: Optional[bytes] = b"",
+    ):
+        self.status: HTTPStatus = status
         try:
             self.description = HTTPStatus(status).phrase
         except ValueError:
@@ -298,11 +314,16 @@ async def asyncfy(func, /, *args, **kwargs):
 
 
 class MultiDict(dict):
-    def __init__(self, mapping=None):
+    def __init__(
+        self,
+        mapping: Union[
+            None, "MultiDict", Dict[str, Any], Iterable[Tuple[str, Any]]
+        ] = None,
+    ) -> None:
         if mapping is None:
             super().__init__()
         elif isinstance(mapping, MultiDict):
-            super().__init__({k.lower(): v[:] for k, v in mapping.itemslist()})
+            super().__init__({k.lower(): v[:] for k, v in mapping.items()})
         elif isinstance(mapping, dict):
             super().__init__(
                 {
@@ -317,50 +338,50 @@ class MultiDict(dict):
         else:
             raise TypeError("Invalid mapping type")
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> Any:
         return super().__getitem__(key.lower())[-1]
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: str, value: Any) -> None:
         super().setdefault(key.lower(), []).append(value)
 
-    def _get(self, key, default=(None,)):
+    def _get(self, key: str, default: Tuple[Any, ...] = (None,)) -> List[Any]:
         return super().get(key.lower(), list(default))
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: Any = None) -> Any:
         return super().get(key.lower(), [default])[-1]
 
-    def _items(self):
+    def _items(self) -> Iterable[Tuple[str, List[Any]]]:
         return super().items()
 
-    def items(self):
-        return {k.lower(): v[-1] for k, v in super().items()}.items()
+    def items(self) -> Iterable[Tuple[str, Any]]:
+        return ((k.lower(), v[-1]) for k, v in super().items())
 
-    def _pop(self, key, default=(None,)):
+    def _pop(self, key: str, default: Tuple[Any, ...] = (None,)) -> Any:
         return super().pop(key.lower(), list(default))
 
-    def pop(self, key, default=None):
-        values = super().get(key.lower(), [])
+    def pop(self, key: str, default: Any = None) -> Any:
+        values: Optional[List] = super().get(key.lower(), [])
         if len(values) > 1:
             return values.pop()
         else:
             return super().pop(key.lower(), default)
 
-    def _setdefault(self, key, default=(None,)):
+    def _setdefault(self, key: str, default: Tuple[Any, ...] = (None,)) -> List[Any]:
         return super().setdefault(key.lower(), list(default))
 
-    def setdefault(self, key, default=None):
+    def setdefault(self, key: str, default: Any = None) -> Any:
         return super().setdefault(key.lower(), [default])[-1]
 
-    def _values(self):
+    def _values(self) -> Iterable[List[Any]]:
         return super().values()
 
-    def values(self):
-        return {k.lower(): v[-1] for k, v in super().items()}.values()
+    def values(self) -> Iterable[Any]:
+        return (v[-1] for v in super().values())
 
-    def _update(self, *args, **kwargs):
+    def _update(self, *args: Any, **kwargs: Any) -> None:
         super().update(*args, **kwargs)
 
-    def update(self, *args, **kwargs):
+    def update(self, *args: Any, **kwargs: Any) -> None:
         new = {}
         new.update(*args, **kwargs)
         super().update(MultiDict(new))
