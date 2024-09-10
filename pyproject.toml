@@ -11,6 +11,11 @@ keywords = ["asgi", "web", "http"]
 [tool.poetry.dependencies]
 python = "^3.9"
 
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.6.4"
+pytest = "^8.3.3"
+pytest-sugar = "^1.0.0"
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 addopts = ["tests.py"]

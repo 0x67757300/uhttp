@@ -18,7 +18,7 @@ class Application:
         shutdown=None,
         before=None,
         after=None,
-        max_content=1048576
+        max_content=1048576,
     ):
         self._routes = routes or {}
         self._startup = startup or []
@@ -27,7 +27,7 @@ class Application:
         self._after = after or []
         self._max_content = max_content
 
-    def mount(self, app, prefix=''):
+    def mount(self, app, prefix=""):
         self._startup += app._startup
         self._shutdown += app._shutdown
         self._before += app._before
@@ -51,49 +51,50 @@ class Application:
         self._after.append(func)
         return func
 
-    def route(self, path, methods=('GET',)):
+    def route(self, path, methods=("GET",)):
         def decorator(func):
-            self._routes.setdefault(path, {}).update({
-                method: func for method in methods
-            })
+            self._routes.setdefault(path, {}).update(
+                {method: func for method in methods}
+            )
             return func
+
         return decorator
 
     def get(self, path):
-        return self.route(path, methods=('GET',))
+        return self.route(path, methods=("GET",))
 
     def head(self, path):
-        return self.route(path, methods=('HEAD',))
+        return self.route(path, methods=("HEAD",))
 
     def post(self, path):
-        return self.route(path, methods=('POST',))
+        return self.route(path, methods=("POST",))
 
     def put(self, path):
-        return self.route(path, methods=('PUT',))
+        return self.route(path, methods=("PUT",))
 
     def delete(self, path):
-        return self.route(path, methods=('DELETE',))
+        return self.route(path, methods=("DELETE",))
 
     def connect(self, path):
-        return self.route(path, methods=('CONNECT',))
+        return self.route(path, methods=("CONNECT",))
 
     def options(self, path):
-        return self.route(path, methods=('OPTIONS',))
+        return self.route(path, methods=("OPTIONS",))
 
     def trace(self, path):
-        return self.route(path, methods=('TRACE',))
+        return self.route(path, methods=("TRACE",))
 
     def patch(self, path):
-        return self.route(path, methods=('PATCH',))
+        return self.route(path, methods=("PATCH",))
 
     async def __call__(self, scope, receive, send):
-        state = scope.get('state', {})
+        state = scope.get("state", {})
 
-        if scope['type'] == 'lifespan':
+        if scope["type"] == "lifespan":
             while True:
                 event = await receive()
 
-                if event['type'] == 'lifespan.startup':
+                if event["type"] == "lifespan.startup":
                     try:
                         for func in self._startup:
                             await asyncfy(func, state)
@@ -101,68 +102,72 @@ class Application:
                             re.compile(k): v for k, v in self._routes.items()
                         }
                     except Exception as e:
-                        await send({
-                            'type': 'lifespan.startup.failed',
-                            'message': f'{type(e).__name__}: {e}'
-                        })
+                        await send(
+                            {
+                                "type": "lifespan.startup.failed",
+                                "message": f"{type(e).__name__}: {e}",
+                            }
+                        )
                         break
-                    await send({'type': 'lifespan.startup.complete'})
+                    await send({"type": "lifespan.startup.complete"})
 
-                elif event['type'] == 'lifespan.shutdown':
+                elif event["type"] == "lifespan.shutdown":
                     try:
                         for func in self._shutdown:
                             await asyncfy(func, state)
                     except Exception as e:
-                        await send({
-                            'type': 'lifespan.shutdown.failed',
-                            'message': f'{type(e).__name__}: {e}'
-                        })
+                        await send(
+                            {
+                                "type": "lifespan.shutdown.failed",
+                                "message": f"{type(e).__name__}: {e}",
+                            }
+                        )
                         break
-                    await send({'type': 'lifespan.shutdown.complete'})
+                    await send({"type": "lifespan.shutdown.complete"})
                     break
 
-        elif scope['type'] == 'http':
+        elif scope["type"] == "http":
             request = Request(
-                method=scope['method'],
-                path=scope['path'],
-                ip=scope.get('client', ('', 0))[0],
-                args=parse_qs(unquote(scope['query_string'])),
-                state=state.copy()
+                method=scope["method"],
+                path=scope["path"],
+                ip=scope.get("client", ("", 0))[0],
+                args=parse_qs(unquote(scope["query_string"])),
+                state=state.copy(),
             )
 
             try:
                 try:
-                    request.headers = MultiDict([
-                        [k.decode(), v.decode()] for k, v in scope['headers']
-                    ])
+                    request.headers = MultiDict(
+                        [[k.decode(), v.decode()] for k, v in scope["headers"]]
+                    )
                 except UnicodeDecodeError:
                     raise Response(400)
 
                 try:
-                    request.cookies.load(request.headers.get('cookie', ''))
+                    request.cookies.load(request.headers.get("cookie", ""))
                 except CookieError:
                     raise Response(400)
 
                 while True:
                     event = await receive()
-                    request.body += event['body']
+                    request.body += event["body"]
                     if len(request.body) > self._max_content:
                         raise Response(413)
-                    if not event['more_body']:
+                    if not event["more_body"]:
                         break
 
-                content_type = request.headers.get('content-type', '')
-                if 'application/json' in content_type:
+                content_type = request.headers.get("content-type", "")
+                if "application/json" in content_type:
                     try:
                         request.json = await to_thread(
                             json.loads, request.body.decode()
                         )
                     except (UnicodeDecodeError, json.JSONDecodeError):
                         raise Response(400)
-                elif 'application/x-www-form-urlencoded' in content_type:
-                    request.form = MultiDict(await to_thread(
-                        parse_qs, unquote(request.body)
-                    ))
+                elif "application/x-www-form-urlencoded" in content_type:
+                    request.form = MultiDict(
+                        await to_thread(parse_qs, unquote(request.body))
+                    )
 
                 for func in self._before:
                     if ret := await asyncfy(func, request):
@@ -176,7 +181,7 @@ class Application:
                             response = Response.from_any(ret)
                         else:
                             response = Response(405)
-                            response.headers['allow'] = ', '.join(methods)
+                            response.headers["allow"] = ", ".join(methods)
                         break
                 else:
                     response = Response(404)
@@ -191,29 +196,31 @@ class Application:
             except Response as early_response:
                 response = early_response
 
-            response.headers.setdefault('content-length', len(response.body))
-            response.headers._update({
-                'set-cookie': [
-                    header.split(': ', maxsplit=1)[1]
-                    for header in response.cookies.output().splitlines()
-                ]
-            })
+            response.headers.setdefault("content-length", len(response.body))
+            response.headers._update(
+                {
+                    "set-cookie": [
+                        header.split(": ", maxsplit=1)[1]
+                        for header in response.cookies.output().splitlines()
+                    ]
+                }
+            )
 
-            await send({
-                'type': 'http.response.start',
-                'status': response.status,
-                'headers': [
-                    [str(k).encode(), str(v).encode()]
-                    for k, l in response.headers._items() for v in l
-                ]
-            })
-            await send({
-                'type': 'http.response.body',
-                'body': response.body
-            })
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": response.status,
+                    "headers": [
+                        [str(k).encode(), str(v).encode()]
+                        for k, l in response.headers._items()
+                        for v in l
+                    ],
+                }
+            )
+            await send({"type": "http.response.body", "body": response.body})
 
         else:
-            raise NotImplementedError(scope['type'], 'is not supported')
+            raise NotImplementedError(scope["type"], "is not supported")
 
 
 class Request:
@@ -222,15 +229,15 @@ class Request:
         method,
         path,
         *,
-        ip='',
+        ip="",
         params=None,
         args=None,
         headers=None,
         cookies=None,
-        body=b'',
+        body=b"",
         json=None,
         form=None,
-        state=None
+        state=None,
     ):
         self.method = method
         self.path = path
@@ -245,26 +252,19 @@ class Request:
         self.state = state or {}
 
     def __repr__(self):
-        return f'{self.method} {self.path}'
+        return f"{self.method} {self.path}"
 
 
 class Response(Exception):
-    def __init__(
-        self,
-        status,
-        *,
-        headers=None,
-        cookies=None,
-        body=b''
-    ):
+    def __init__(self, status, *, headers=None, cookies=None, body=b""):
         self.status = status
         try:
             self.description = HTTPStatus(status).phrase
         except ValueError:
-            self.description = ''
-        super().__init__(f'{self.status} {self.description}')
+            self.description = ""
+        super().__init__(f"{self.status} {self.description}")
         self.headers = MultiDict(headers)
-        self.headers.setdefault('content-type', 'text/html; charset=utf-8')
+        self.headers.setdefault("content-type", "text/html; charset=utf-8")
         self.cookies = SimpleCookie(cookies)
         self.body = body
 
@@ -279,8 +279,8 @@ class Response(Exception):
         elif isinstance(any, dict):
             return cls(
                 status=200,
-                headers={'content-type': 'application/json'},
-                body=json.dumps(any).encode()
+                headers={"content-type": "application/json"},
+                body=json.dumps(any).encode(),
             )
         elif isinstance(any, cls):
             return any
@@ -304,16 +304,18 @@ class MultiDict(dict):
         elif isinstance(mapping, MultiDict):
             super().__init__({k.lower(): v[:] for k, v in mapping.itemslist()})
         elif isinstance(mapping, dict):
-            super().__init__({
-                k.lower(): [v] if not isinstance(v, list) else v[:]
-                for k, v in mapping.items()
-            })
+            super().__init__(
+                {
+                    k.lower(): [v] if not isinstance(v, list) else v[:]
+                    for k, v in mapping.items()
+                }
+            )
         elif isinstance(mapping, (tuple, list)):
             super().__init__()
             for key, value in mapping:
                 self._setdefault(key.lower(), []).append(value)
         else:
-            raise TypeError('Invalid mapping type')
+            raise TypeError("Invalid mapping type")
 
     def __getitem__(self, key):
         return super().__getitem__(key.lower())[-1]
