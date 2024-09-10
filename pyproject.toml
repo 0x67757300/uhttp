@@ -10,6 +10,7 @@ keywords = ["asgi", "web", "http"]
 
 [tool.poetry.dependencies]
 python = "^3.9"
+typing-extensions = "^4.12.2"
 
 [tool.poetry.group.dev.dependencies]
 ruff = "^0.6.4"

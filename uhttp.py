@@ -2,29 +2,109 @@
 
 from __future__ import annotations
 
-import enum
 import json
 import re
 from ast import Tuple
 from asyncio import to_thread
+from enum import Enum
 from http import HTTPMethod, HTTPStatus
 from http.cookies import CookieError, SimpleCookie
 from inspect import iscoroutinefunction
-from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Union
+from typing import (
+    Annotated,
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    TypeVar,
+    Union,
+)
 from urllib.parse import parse_qs, unquote
 
+from typing_extensions import Doc
+
+AppType = TypeVar("AppType", bound="uHTTP")  # type: ignore
 RouteHandler = Union[Callable[..., None], Callable[..., Awaitable[None]]]
 Routes = Dict[str, Dict[HTTPMethod, RouteHandler]]
 
 
 class Application:
+    """
+    ### Application
+
+    An [ASGI](https://asgi.readthedocs.io/en/latest/) application. Called once per request by the server.
+
+    ```python
+    Application(*, routes=None, startup=None, shutdown=None, before=None, after=None, max_content=1048576)
+    ```
+    E.g.:
+
+    ```python
+    app = Application(
+        startup=[open_db],
+        before=[counter, auth],
+        routes={
+            '/': {
+                'GET': lambda request: 'HI!',
+                'POST': new
+            },
+            '/users/': {
+                'GET': users,
+                'PUT': users
+            }
+        },
+        after=[logger],
+        shutdown=[close_db]
+    )
+    ```
+    """
+
     def __init__(
-        self,
-        routes: Optional[Routes] = None,
-        startup: Optional[List[RouteHandler]] = None,
-        shutdown: Optional[List[RouteHandler]] = None,
-        before: Optional[List[RouteHandler]] = None,
-        after: Optional[List[RouteHandler]] = None,
+        self: AppType,
+        routes: Annotated[
+            Optional[Routes],
+            Doc(
+                """ 
+            A dictionary of path, methods and functions. 
+                E.g.
+                ```python
+                routes={
+                    '/': {
+                        'GET': lambda request: 'HI!',
+                        'POST': new
+                        },
+                    '/users/': {
+                        'GET': users,
+                        'PUT': users
+                        }
+                    }
+                ```
+            """
+            ),
+        ] = None,
+        startup: Annotated[
+            Optional[List[RouteHandler]],
+            Doc(
+                """List of functions to be called at the beginning of the Lifespan protocol."""
+            ),
+        ] = None,
+        shutdown: Annotated[
+            Optional[List[RouteHandler]],
+            Doc(
+                """List of functions to be called at the ending of the Lifespan protocol."""
+            ),
+        ] = None,
+        before: Annotated[
+            Optional[List[RouteHandler]],
+            Doc("""List of functions to be called before a response is made."""),
+        ] = None,
+        after: Annotated[
+            Optional[List[RouteHandler]],
+            Doc("""List of functions to be called after a response is made."""),
+        ] = None,
         max_content: int = 1048576,
     ) -> None:
         self._routes = routes or {}
@@ -35,6 +115,19 @@ class Application:
         self._max_content = max_content
 
     def mount(self, app: Application, prefix: Optional[str] = "") -> None:
+        """
+        Mounts another application at the specified prefix.
+
+        ```python
+        utils = Application()
+
+        @utils.before
+        def incoming(request):
+            print(f'Incoming from {request.ip}')
+
+        app.mount(utils, prefix="/utils")
+        ```
+        """
         self._startup += app._startup
         self._shutdown += app._shutdown
         self._before += app._before
@@ -43,24 +136,119 @@ class Application:
         self._max_content = max(self._max_content, app._max_content)
 
     def startup(self, func: Callable) -> Callable:
+        """
+        Append the decorated function to the list of functions called at the beginning of the [Lifespan](https://asgi.readthedocs.io/en/latest/specs/lifespan.html) protocol.
+
+        ```python
+        @app.startup
+        [async] def func(state)
+        ```
+
+        E.g.:
+
+        ```python
+        @app.startup
+        async def open_db(state):
+            state['db'] = await aiosqlite.connect('db.sqlite')
+        ```
+        """
         self._startup.append(func)
         return func
 
     def shutdown(self, func: Callable) -> Callable:
+        """Appends the decorated function to the list of functions called at the end of the Lifespan protocol.
+
+        ```python
+        @app.shutdown
+        [async] def func(state)
+        ```
+
+        E.g.:
+
+        ```python
+        @app.shutdown
+        async def close_db(state):
+            await state['db'].close()
+        ```
+        """
         self._shutdown.append(func)
         return func
 
     def before(self, func: Callable) -> Callable:
+        """
+        Appends the decorated function to the list of functions called before a response is made.
+
+        ```python
+        @app.before
+        [async] def func(request)
+        ```
+
+        E.g.:
+
+        ```python
+        @app.before
+        def restrict(request):
+            user = request.state['session'].get('user')
+            if user != 'admin':
+                raise Response(401)
+        ```
+        """
         self._before.append(func)
         return func
 
     def after(self, func: Callable) -> Callable:
+        """
+        Appends the decorated function to the list of functions called after a response is made.
+
+        ```python
+        @app.after
+        [async] def func(request, response)
+        ```
+
+        E.g.:
+
+        ```python
+        @app.after
+        def logger(request, response):
+            print(request, '-->', response)
+        ```
+        """
         self._after.append(func)
         return func
 
     def route(
         self, path: str, methods: Tuple[HTTPMethod] = (HTTPMethod.GET,)
     ) -> Callable:
+        """
+        Inserts the decorated function to the routing table.
+
+        ```python
+        @app.route(path, methods=('GET',))
+        [async] def func(request)
+        ```
+
+        Paths are compiled at startup as regular expression patterns. Named groups define path parameters.
+
+        If the request path doesn't match any route pattern, a `404 Not Found` response is returned.
+
+        If the request method isn't in the route methods, a `405 Method Not Allowed` response is returned.
+
+        Decorators for the standard methods (get, post, put, delete, etc) are also available.
+
+        E.g.:
+
+        ```python
+        @app.route('/', methods=('GET', 'POST'))
+        def index(request):
+            return f'{request.method}ing from {request.ip}'
+
+        @app.get(r'/user/(?P<id>\\d+)')
+        def profile(request):
+            user = request.state['db'].get_or_404(request.params['id'])
+            return f'{user.name} has {user.friends} friends!'
+        ```
+        """
+
         def decorator(func):
             self._routes.setdefault(path, {}).update(
                 {method: func for method in methods}
@@ -233,21 +421,79 @@ class Application:
 
 
 class Request:
+    """An HTTP request. Created every time the application is called on the HTTP protocol with a shallow copy of the state."""
+
     def __init__(
         self,
-        method: HTTPMethod,
-        path: str,
+        method: Annotated[
+            HTTPMethod,
+            Doc(
+                """Standard HTTP method.
+                Read more [here](https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods)"""
+            ),
+        ],
+        path: Annotated[
+            str,
+            Doc(
+                "URL path. For example: https://www.example.com/products/12345/details"
+            ),
+        ],
         *,
-        ip: Optional[str] = "",
-        params: Optional[MultiDict] = None,
-        args: Optional[Dict] = None,
-        headers: Optional[MultiDict] = None,
-        cookies: Optional[SimpleCookie] = None,
-        body: Optional[bytes] = b"",
-        json: Optional[Dict] = None,
-        form: MultiDict = None,
-        state: Optional[Dict] = None,
-    ):
+        ip: Annotated[
+            Optional[str],
+            Doc(
+                "The IP address of the request. Defaults to an empty string if not provided."
+            ),
+        ] = "",
+        params: Annotated[
+            Optional[MultiDict],
+            Doc(
+                "Query parameters passed with the request. Defaults to an empty dictionary if not provided."
+            ),
+        ] = None,
+        args: Annotated[
+            Optional[Dict],
+            Doc(
+                "Arguments passed with the request, typically in the form of key-value pairs. Defaults to an empty MultiDict if not provided."
+            ),
+        ] = None,
+        headers: Annotated[
+            Optional[MultiDict],
+            Doc(
+                "HTTP headers sent with the request. Defaults to an empty MultiDict if not provided."
+            ),
+        ] = None,
+        cookies: Annotated[
+            Optional[SimpleCookie],
+            Doc(
+                "Cookies sent with the request. Defaults to an empty SimpleCookie if not provided."
+            ),
+        ] = None,
+        body: Annotated[
+            Optional[bytes],
+            Doc(
+                "The body of the request, typically for POST or PUT requests. Defaults to an empty byte string."
+            ),
+        ] = b"",
+        json: Annotated[
+            Optional[Dict],
+            Doc(
+                "Parsed JSON data sent with the request. Defaults to None if not provided."
+            ),
+        ] = None,
+        form: Annotated[
+            MultiDict,
+            Doc(
+                "Form data sent with the request. Defaults to an empty MultiDict if not provided."
+            ),
+        ] = None,
+        state: Annotated[
+            Optional[Dict],
+            Doc(
+                "State associated with the request. Defaults to an empty dictionary if not provided."
+            ),
+        ] = None,
+    ) -> None:
         self.method = method
         self.path = path
         self.ip = ip
@@ -265,14 +511,32 @@ class Request:
 
 
 class Response(Exception):
+    """An HTTP Response. May be raised or returned at any time in middleware or route functions."""
+
     def __init__(
         self,
-        status: HTTPStatus,
+        status: Annotated[
+            HTTPStatus,
+            Doc(
+                "The HTTP status code for the response. For example, `HTTPStatus.OK` for a 200 OK response."
+            ),
+        ],
         *,
-        headers: Optional[MultiDict] = None,
-        cookies: Optional[SimpleCookie] = None,
-        body: Optional[bytes] = b"",
-    ):
+        headers: Annotated[
+            Optional[MultiDict],
+            Doc(
+                "HTTP headers to be included in the response. Defaults to None if not provided."
+            ),
+        ] = None,
+        cookies: Annotated[
+            Optional[SimpleCookie],
+            Doc("Cookies to be set in the response. Defaults to None if not provided."),
+        ] = None,
+        body: Annotated[
+            Optional[bytes],
+            Doc("The body of the response. Defaults to an empty byte string."),
+        ] = b"",
+    ) -> None:
         self.status: HTTPStatus = status
         try:
             self.description = HTTPStatus(status).phrase
@@ -314,6 +578,8 @@ async def asyncfy(func, /, *args, **kwargs):
 
 
 class MultiDict(dict):
+    """Used for internal usage"""
+
     def __init__(
         self,
         mapping: Union[
