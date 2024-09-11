@@ -571,7 +571,7 @@ class Response(Exception):
             self.description = ""
         super().__init__(f"{self.status} {self.description}")
         self.headers = MultiDict(headers)
-        self.headers.setdefault("content-type", "text/html; charset=utf-8")
+        self.headers.setdefault("content-type", f"{MediaType.HTML}; charset=utf-8")
         self.cookies = SimpleCookie(cookies)
         self.body = body
         self.dumps = dumps
@@ -581,19 +581,19 @@ class Response(Exception):
         if isinstance(any, int):
             return cls(status=any, body=HTTPStatus(any).phrase.encode())
         elif isinstance(any, str):
-            return cls(status=200, body=any.encode())
+            return cls(status=HTTPStatus.OK, body=any.encode())
         elif isinstance(any, bytes):
-            return cls(status=200, body=any)
+            return cls(status=HTTPStatus.OK, body=any)
         elif isinstance(any, dict):
             return cls(
-                status=200,
+                status=HTTPStatus.OK,
                 headers={"content-type": MediaType.JSON},
                 body=cls().dumps(any).encode(),
             )
         elif isinstance(any, cls):
             return any
         elif any is None:
-            return cls(status=204)
+            return cls(status=HTTPStatus.NO_CONTENT)
         else:
             raise TypeError
 
