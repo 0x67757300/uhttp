@@ -541,7 +541,7 @@ class Response(Exception):
             Doc(
                 "The HTTP status code for the response. For example, `HTTPStatus.OK` for a 200 OK response."
             ),
-        ],
+        ] = HTTPStatus.OK,
         *,
         headers: Annotated[
             Optional[MultiDict],
@@ -557,6 +557,12 @@ class Response(Exception):
             Optional[bytes],
             Doc("The body of the response. Defaults to an empty byte string."),
         ] = b"",
+        dumps: Annotated[
+            Callable,
+            Doc(
+                "Callable used to serialize data (e.g., `msgspec`, `orjson`, etc), defaults to `json.dumps`."
+            ),
+        ] = json.dumps,
     ) -> None:
         self.status: HTTPStatus = status
         try:
@@ -568,6 +574,7 @@ class Response(Exception):
         self.headers.setdefault("content-type", "text/html; charset=utf-8")
         self.cookies = SimpleCookie(cookies)
         self.body = body
+        self.dumps = dumps
 
     @classmethod
     def from_any(cls, any):
@@ -581,7 +588,7 @@ class Response(Exception):
             return cls(
                 status=200,
                 headers={"content-type": MediaType.JSON},
-                body=json.dumps(any).encode(),
+                body=cls().dumps(any).encode(),
             )
         elif isinstance(any, cls):
             return any
